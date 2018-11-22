@@ -1,0 +1,863 @@
+------------------------完全分布式系统搭建-------------------------
+#############################集群规划###############################
+	|	hadoop101   |    hadoop102   |    hadoop103        |
+-------------------------------------------------------------------
+HDFS	|	namenode    |		     |    secondarynamenode|
+	|	datanode    |    datanode    |	  datanode	   |
+-------------------------------------------------------------------
+YARN    |		    | resourcemanager|                     |
+	|	nodemanager | nodemanager    |    nodemanager      |
+####################################################################
+namenode 上最好别放datanode
+#############################################集群规划###############################
+	|   hadoop100	|	hadoop101   |    hadoop102   |    hadoop103        |
+-----------------------------------------------------------------------------------
+HDFS	|		|	namenode    |		     |    secondarynamenode|
+	|   datanode	|		    |    datanode    |	  datanode	   |
+----------------------------------------------------------------------------------
+YARN    |		|		    | resourcemanager|                     |
+	|  nodemanager 	|	            | nodemanager    |    nodemanager      |
+#######	#############################################################################
+------------------服务器配置----------------------------------
+1、关闭防火墙 chkconfig iptables off
+2、静态IP配置
+vi /etc/sysconfig/network-scripts/ifcfg-eth0
+DEVICE=eth0
+HWADDR=00:0C:29:56:BE:EF
+TYPE=Ethernet
+UUID=bed75e06-35c7-440e-8540-47f2bb101e89
+ONBOOT=yes
+NM_CONTROLLED=yes
+BOOTPROTO=static
+IPADDR=192.168.1.100
+GATEWAY=192.168.1.2
+DNS1=192.168.1.2
+注意：克隆服务器时候需要把vi /etc/udev/rules.d/70-persistent-net.rules 中的HWADDRcopy到ifcfg-eth0中
+vi /etc/sysconfig/network
+修改HOSTNAME=hadoop101
+
+3）夸服务器拷贝SCP
+scp -r /opt root@192.168.1.100:/opt  推
+scp -r root@192.168.1.100:/opt /opt  拉
+
+4）SSH无密码登录其他服务器
+hadoop101无密码登录其它服务器hadoop102 hadoop103
+1、切换到su test用户,cd ~/.shh；中输入：ssh-keygen -t rsa，生成id_rsa（私）id_rsa.pub（公）
+2、将id_rsa.pub 拷贝到其它服务器，输入：ssh-copy-id hadoop102、 ssh-copy-id hadoop103
+3、同时也要给自己免登录，输入： ssh-copy-id hadoop101
+4、切换到root按以上步骤同样创建秘钥
+
+我们将hadoop102 布置为resurcemanager，hadoop101布置为namenode，所以需要实现hadoop102对hadoop101、hadoop103实现无密码登录
+在hadoop102中test下输入：ssh-keygen -t rsa，同时copy到hadoop101、hadoop103
+
+所有服务器执行同一个命令
+将文件创建在/usr/local/bin/下
+xsync luo
+xcall rm -rf /usr/local/bin/luo
+
+xcall chown test:test /opt/module/hadoop-2.7.2/ -R
+
+xsync：
+#!/bin/bash
+#1 获取输入参数个数，如果没有参数，直接退出
+pcount=$#
+if((pcount==0)); then
+echo no args;
+exit;
+fi
+#2 获取文件名称
+p1=$1
+fname=`basename $p1`
+echo fname=$fname
+
+#3 获取上级目录到绝对路径
+pdir=`cd -P $(dirname $p1); pwd`
+echo pdir=$pdir
+
+#4 获取当前用户名称
+user=`whoami`
+
+#5 循环
+for((host=102; host<104; host++)); do
+        #echo $pdir/$fname $user@hadoop$host:$pdir
+        echo --------------- hadoop$host ----------------
+        rsync -rvl $pdir/$fname $user@hadoop$host:$pdir
+done
+
+xcall:
+#!/bin/bash
+#1 获取输入参数个数，如果没有参数，直接退出
+pcount=$#
+if((pcount==0)); then
+echo no args;
+exit;
+fi
+echo -------------localhost----------
+$@
+for((host=101; host<104; host++)); do
+        echo ----------hadoop$host---------
+        ssh hadoop$host $@
+done
+----------------------hadoop----------------------------------
+4）需要配置的文件：
+1、core-site.xml
+ <!-- 指定HDFS中的namenode的地址-->
+        <property>
+                <name>fs.defaultFS</name>
+                <value>hdfs://hadoop101:9000</value>
+        </property>
+	<!--指定hadoop运行时产生文件的存储目录-->
+        <property>
+                <name>hadoop.tmp.dir</name>
+                <value>/opt/module/hadoop-2.7.2/data/tmp</value>
+        </property>
+
+2、hdfs-site.xml
+	<!--指定HDFS副本的数量-->
+        <property>
+                <name>dfs.replication</name>
+                <value>3</value>
+        </property>
+	<property>
+        	<name>dfs.namenode.secondary.http-address</name>
+        	<value>hadoop103:50090</value>
+    	</property>
+
+3、mapred-site.xml
+        <!-- 指定 mr 运行在 yarn上 -->
+        <property>
+                <name>mapreduce.framework.name</name>
+                <value>yarn</value>
+        </property>
+
+        <!--启动历史服务器-->
+        <property>
+                <name>mapreduce.jobhistory.address</name>
+                <value>hadoop101:10020</value>
+        </property>
+
+        <property>
+                <name>mapreduce.jobhistory.webapp.address</name>
+                <value>hadoop101:19888</value>
+        </property>
+
+4、yarn-site.xml
+ <!-- reducer获取数据的方式 -->
+        <property>
+                <name>yarn.nodemanager.aux-services</name>
+                <value>mapreduce_shuffle</value>
+        </property>
+        <!-- 指定 YARN的 ResourceManager的地址 -->
+        <property>
+                <name>yarn.resourcemanager.hostname</name>
+                <value>hadoop102</value>
+        </property>
+        <!-- 日志聚集功能使能 -->
+        <property>
+                <name>yarn.log-aggregation-enable</name>
+                <value>true</value>
+        </property>
+
+        <!-- 日志保留时间设置7天 -->
+        <property>
+                <name>yarn.log-aggregation.retain-seconds</name>
+                <value>604800</value>
+        </property>
+
+5、slacves（控制打开datanode）
+	
+	hadoop101
+	hadoop102
+	hadoop103
+---------------hadoop 启动集群----------------------------------------
+第一次启动需要格式化namenode，注意先删数据再格式化
+xcall rm -rf /opt/module/hadoop-2.7.2/data/
+xcall rm -rf /opt/module/hadoop-2.7.2/logs
+/opt/module/hadoop-2.7.2/bin/hdfs namenode -format
+
+1）启动hadoop
+sbin/hadoop-daemon.sh start namenode
+sbin/hadoop-daemon.sh start datanode
+sbin/yarn-daemon.sh start nodemanager
+sbin/yarn-daemon.sh start resourcemanager
+sbin/mr-jobhistory-daemon.sh start historyserver
+
+2）关闭hadoop相关服务
+/opt/module/hadoop-2.7.2/sbin/hadoop-daemon.sh stop namenode
+/opt/module/hadoop-2.7.2/sbin/hadoop-daemon.sh stop datanode
+/opt/module/hadoop-2.7.2/sbin/yarn-daemon.sh stop nodemanager
+/opt/module/hadoop-2.7.2/sbin/yarn-daemon.sh stop resourcemanager
+/opt/module/hadoop-2.7.2/sbin/mr-jobhistory-daemon.sh stop historyserver
+
+
+2）在hdfs文件系统上创建一个input文件
+bin/hdfs dfs -mkdir -p /user/test/input
+
+递归删掉所有的文件和目录，等价于unix下的rm –rf <src>
+9. hadoop fs –rmr [skipTrash] <src>
+
+
+用例
+bin/hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.2.jar wordcount /user/test/input /user/test/output
+
+3)web查看信息
+1、web查看hdfs系统文件
+   http://192.168.1.100:50070/dfshealth.html#tab-overview
+2、yarn web查看
+   http://192.168.1.100:8088/cluster
+3、web查看jobhistory
+   http://192.168.1.100:19888/jobhistory
+
+2）启动dfs hadoop（群启动）
+在adoop101即namenode启动hdf
+[test@hadoop101 hadoop-2.7.2]$ sbin/start-dfs.sh
+
+3）启动yarn，在hadoop102上
+[test@hadoop102 hadoop-2.7.2]$ sbin/start-yarn.sh
+
+4）关闭所有服务在namenode上输入：
+sbin/stop-all.sh 
+但是ResourceManager需要到hadoop102上关闭 
+--------------------hadoop HDFS操作命令-----------------------------
+hadoop fs -xx(和linux命令一样)
+
+---------------------Flume---------------------------------------------
+1）配置Flume相关的环境变量
+修改source /etc/profile
+export FLUME_HOME=/opt/module/apache-flume-1.7.0-bin
+export FLUME_CONF_DIR=${FLUME_HOME}/conf
+export PATH=$PATH:${FLUME_HOME}/bin
+
+分发到所有集群并执行 source /etc/profile
+
+2)修改配置文件：
+mv  flume-conf.properties.template  flume-conf.properties
+
+3）配置启动脚本（/opt/module/apache-flume-1.7.0-bin/jobs/flume-telnet.conf等）：
+#agent1表示代理名称
+agent1.sources=source1
+agent1.sinks=sink1
+agent1.channels=channel1
+
+#配置source1
+agent1.sources.source1.type=spooldir
+agent1.sources.source1.spoolDir=/opt/flume_logs/logs
+agent1.sources.source1.channels=channel1
+agent1.sources.source1.fileHeader = false
+agent1.sources.source1.interceptors = i1
+agent1.sources.source1.interceptors.i1.type = timestamp
+
+#配置channel1
+agent1.channels.channel1.type=file
+agent1.channels.channel1.checkpointDir=/opt/flume_logs/logs_tmp_cp
+agent1.channels.channel1.dataDirs=/opt/flume_logs/logs_tmp
+
+#配置sink1
+agent1.sinks.sink1.type=hdfs
+agent1.sinks.sink1.hdfs.path=hdfs://hadoop101:9000/logs
+agent1.sinks.sink1.hdfs.fileType=DataStream
+agent1.sinks.sink1.hdfs.writeFormat=TEXT
+agent1.sinks.sink1.hdfs.rollInterval=1
+agent1.sinks.sink1.channel=channel1
+agent1.sinks.sink1.hdfs.filePrefix=%Y-%m-%d
+-----或者：
+#  example.conf: A single-node Flume configuration
+# Name the components on this agent
+a1.sources = r1
+a1.sinks = k1
+a1.channels = c1
+
+# Describe/configure the source
+a1.sources.r1.type = netcat
+a1.sources.r1.bind = localhost
+a1.sources.r1.port = 44444
+
+# Describe the sink
+a1.sinks.k1.type = logger
+
+# Use a channel which buffers events in memory
+a1.channels.c1.type = memory
+a1.channels.c1.capacity = 1000
+a1.channels.c1.transactionCapacity = 100
+
+# Bind the source and sink to the channel
+a1.sources.r1.channels = c1
+a1.sinks.k1.channel = c1
+This configuration defines a sin
+
+启动命令：
+bin/flume-ng agent\
+ --conf conf/ \
+ --conf-file jobs/flume_telnet.conf \
+--name a1 \
+-Dflume.root.logger=INFO,console
+bin/flume-ng agent --conf conf/ --conf-file jobs/flume-telnet.conf --name a1 -Dflume.root.logger=INFO,console
+
+关闭命令：kill Application的PID
+查看端口：
+netstat -tunlp
+开启telnet ：chkconfig telnet on
+ telnet 192.168.1.101 44444
+
+
+---------------------- zookeeper---------------------------------
+用来统一管理集群
+1）zoo.cfg添加：
+server.1=hadoop101:2888:3888
+server.2=hadoop102:2888:3888
+server.3=hadoop103:2888:3888
+Server.A=B:C:D
+Server.A=B:C:D。
+A是一个数字，表示这个是第几号服务器；
+B是这个服务器的ip地址；
+C是这个服务器与集群中的Leader服务器交换信息的端口；
+D是万一集群中的Leader服务器挂了，需要一个端口来重新进行选举，选出一个新的Leader，而这个端口就是用来执行选举时服务器相互通信的端口。
+
+2）修改：dataDir=/opt/module/zookeeper-3.4.10/zkData
+
+3）在zkData目录下创建myid文件，值为：A
+集群模式下配置一个文件myid，这个文件在dataDir目录下，这个文件里面有一个数据就是A的值，Zookeeper启动时读取此文件，拿到里面的数据与zoo.cfg里面的配置信息比较从而判断到底是哪个server。
+注意：在每个服务器中修改对应的myid
+
+运行： /opt/module/zookeeper-3.4.10/bin/zkServer.sh start
+查看状态：/opt/module/zookeeper-3.4.10/bin/zkServer.sh status
+启动客户端： /opt/module/zookeeper-3.4.10/bin/zkCli.sh 退出：quit  
+退出：/opt/module/zookeeper-3.4.10/bin/zkServer.sh stop
+============================scala ============================================
+1）解压安装包scala-2.11.4.tgz
+
+2）修改环境变量：vi /etc/profile
+添加：
+export SCALA_HOME=/opt/module/scala-2.11.4
+export PATH=$PATH:${SCALA_HOME}/bin
+
+3）将profile与scala-2.11.4分发各个服务器上，并 source /etc/profile
+
+4)验证
+scala -version
+
+
+
+----------------------------kafka---------------------------------------
+1）修改配置：
+ vi server.properties
+
+#kafka运行日志存放的路径
+log.dirs=/opt/module/kafka/logs
+
+#配置连接Zookeeper集群地址
+zookeeper.connect=hadoop101:2181,hadoop102:2181,hadoop103:2181
+
+
+2）配置kafka环境变量
+ vi /etc/profile
+exprot KAFKA_HOME=/opt/module/kafka_2.11-0.11.0.2
+export PATH=$PATH:${KAFKA_HOME}/bin
+source /etc/profile
+
+3）分别在各服务器上修改config/server.properties中的broker.id
+broker.id=1、broker.id=2
+注：broker.id不得重复
+
+4）启动 关闭
+/opt/module/kafka_2.11-0.11.0.2/bin/kafka-server-start.sh /opt/module/kafka_2.11-0.11.0.2/config/server.properties &
+/opt/module/kafka_2.11-0.11.0.2/bin/kafka-server-stop.sh stop
+(关闭kafka之前要保正zookeeper服务还在)
+
+查看当前服务器中的所有topic
+/opt/module/kafka_2.11-0.11.0.2/bin/kafka-topics.sh --zookeeper hadoop101:2181 --list
+2）创建topic（创建的top可以在所有服务器上看到）
+/opt/module/kafka_2.11-0.11.0.2/bin/kafka-topics.sh --zookeeper hadoop101:2181 --create --replication-factor 1 --partitions 1 --topic test
+选项说明：
+--topic 定义topic名
+--replication-factor  定义副本数
+--partitions  定义分区数
+
+3）删除topic（删除操作需要给所有服务器的server.properties中添加 delete.topic.enable=true 使能）
+/opt/module/kafka_2.11-0.11.0.2/bin/kafka-topics.sh --zookeeper hadoop101:2181 --delete --topic test
+
+4）发送消息(也就是创建生产者，如果是在java实现producter则要在相应的server.properties中添加 hostname=localhost)
+/opt/module/kafka_2.11-0.11.0.2/bin/kafka-console-producer.sh --broker-list hadoop101:9092 --topic test
+>hello world
+注意消费者和生产者的端口号 可从producer.properties consumer.properties  查看
+
+5）消费消息(也就是创建消费者)
+/opt/module/kafka_2.11-0.11.0.2/bin/kafka-console-consumer.sh --zookeeper hadoop101:2181 --from-beginning --topic test
+--from-beginning：会把test主题中以往所有的数据都读取出来。根据业务场景选择是否增加该配置。
+
+bin/kafka-topics.sh --zookeeper hadoop101:2181 --replication-factor 3 --partition 1 --topic access
+
+
+6)可选安装，将slf4j-1.7.6.zip 把slf4j中的slf4j-nop-1.7.6.jar复制到kafka的libs目录下面
+
+-------------------------mapreduce编程-----------------------------------
+分为三步：
+1）mapper
+
+
+2）reduce
+
+
+3）driver
+		// conf优化设置
+        Configuration conf = getConf();
+        conf.setBoolean("mapred.map.tasks.speculative.execution", false);
+        conf.setBoolean("mapred.reduce.tasks.speculative.execution", false);
+        conf.setStrings("mapred.child.java.opts","-Xmx1024m");
+        conf.setInt("mapred.map.tasks",1); //自己的测试机设置小一点
+        //获取配置信息
+        Job job = Job.getInstance(conf,"Recommend");
+        job.setNumReduceTasks(1);
+        //设置jar加载路径
+        job.setJarByClass(RecommendCleaner.class);
+        //设置map 和reduce类
+        job.setMapperClass(RecommendMapper.class);
+        job.setReducerClass(RecommendReducer.class);
+        //设置map输出数据kv类型
+        job.setMapOutputKeyClass(Text.class);
+        job.setMapOutputValueClass(DoubleWritable.class);
+        //设置reduce输出数据kv类型
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(DoubleWritable.class);
+        //可以设置多输入路径
+        for (int i = 0; i < args.length-2; i++) {
+            FileInputFormat.addInputPath(job,new Path(args[i]));
+        }
+        //output
+        FileOutputFormat.setOutputPath(job, new Path(args[args.length-2]));
+--------------------------------redis部署 ---------------------------------------
+主要用来快速存储
+1、pom：
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>2.8.0</version>
+        </dependency>
+
+2、创建redis客户端: Jedis jedis = new jedis("ip",port);
+检查redis服务是否可用：string response = jedis.ping();
+打印结果： systm.out.prinln（response）
+---------------------------------spark-----------------------------------------------
+1）standlone模式：
+---------1）standlone模式：--------
+1、cd /home/bigdata/hadoop/spark-2.1.1-bin-hadoop2.7/conf 
+	修改slaves.template复制为slaves	
+	将spark-env.sh.template复制为spark-env.sh
+	修改slave文件，将work的hostname输入：hadoop102 hadoop103
+	修改spark-env.sh文件指定主节点和端口号：export SPARK_MASTER_HOST = hadoop101 ,exportSPARK_MASTER_PORT=7077
+2、分发到hadoop102 103服务器上
+3、遇到 “JAVA_HOME not set” 异常：修改sbin/spark-config.sh添加：
+	export JAVA_HOME=/opt/module/jdk1.7.0_71
+3、在hadoop101上启动spark	：sbin/start-all.sh  
+4、查看是否启动在网页上输入：http://192.168.1.101:8080/
+5、 进入在线scala编程:./spark-shell --master spark://hadoop101:7077  或者local
+import org.apache.spark.{SparkConf, SparkContext}   
+   val conf = new SparkConf().setMaster("local[*]").setAppName("WordCount")
+    //创建SparkContext，该对象是提交spark App的入口
+    val sc = new SparkContext(conf)
+	
+配置日志服务器
+1、进入sbin中修改： mv spark-defaults.conf.template spark-defaults.conf
+	开启：
+	spark.eventLog.enabled           true
+	spark.eventLog.dir               hdfs://hadoop101:9000/directory
+2、修改spark-env.sh 
+export SPARK_HISTORY_OPTS="-Dspark.history.ui.port=4000
+-Dspark.history.retainedApplications=3
+-Dspark.history.fs.logDirectory=hdfs://hadoop101:9000/directory"
+
+3、分发两个文件到所有集群中
+-----------
+
+
+---yarn模式配置-----
+export SPARK_HOME=/opt/module/spark-2.1.1-bin-hadoop2.7
+export PATH=$PATH:${SPARK_HOME}/bin
+export CLASSPATH=.:${CLASSPATH}:${JAVA_HOME}/lib:${JAVA_HOME}/jre/lib
+
+修改mv spark-env.sh.template spark-env.sh
+export JAVA_HOME=/opt/module/jdk1.7.0_71
+export SCALA_HOME=/opt/module/scala-2.11.4
+export HADOOP_HOME=/opt/module/hadoop-2.7.2
+export HADOOP_CONF_DIR=/opt/module/hadoop-2.7.2/etc/hadoop
+
+--------------------
+通过jar包提交任务（工作中常用）
+1、需要通过bin/spark-submit 提交
+2、必备 --class 指定你的jar包的主类
+3、必备 --master 指定你访问集群地址 如果你的jar包指定了master 那么不用再配置
+4、必备 jar路径 jar参数
+
+5、
+<dependency>
+	<groupId>org.apache.spark</groupId>
+	<artifactId>spark-core_2.11</artifactId>
+	<version>${spark.version}</version>
+	<scope>provided</scope>
+	<!--<scope>provided</scope>-->
+</dependency>
+pom中添加<scope>provided</scope>减少打包文件，但这种模式下本地无法运行
+-------spark 编程------------------
+1）提交jar包： bin/spark-submit --class com.test.spark.wordcount /mnt/hgfs/share/wordcount/sparkcore/sparkwordcount/target/wordcount-jar-with-dependencies.jar 
+2）yarn模式提交：bin/spark-submit --class com.test.spark.wordcount --master yarn --deploy-mode client  /mnt/hgfs/share/wordcount/sparkcore/sparkwordcount/target/wordcount-jar-with-dependencies.jar
+
+
+
+--------------------------------hive mysql----------------------------------------------------------
+1)解压：hive-0.13.1-cdh5.3.6.tar.gz 
+添加环境变量：vi /etc/profile 
+export HIVE_HOME=/opt/module/hive-0.13.1-cdh5.3.6
+export PATH=$PATH:{HIVE_HOME}/bin
+
+2)在hadoop101上安装mysql
+2、使用yum安装mysql server。
+yum install -y mysql-server
+service mysqld start
+chkconfig mysqld on
+3、使用yum安装mysql connector
+yum install -y mysql-connector-java
+4、将mysql connector拷贝到hive的lib包中
+cp /usr/share/java/mysql-connector-java-5.1.17.jar /opt/module/hive-0.13.1-cdh5.3.6/lib/
+5、输入mysql进入编辑界面
+在mysql上创建hive元数据库，创建hive账号密码hive，并进行授权
+create database if not exists hive_metadata;
+grant all privileges on hive_metadata.* to 'hive'@'%' identified by 'hive';
+grant all privileges on hive_metadata.* to 'hive'@'localhost' identified by 'hive';
+grant all privileges on hive_metadata.* to 'hive'@'hadoop101' identified by 'hive';
+flush privileges;
+use hive_metadata;
+exit
+
+3)配置hive文件
+1、mv hive-default.xml.template hive-site.xml
+<property>
+  <name>javax.jdo.option.ConnectionURL</name>
+  <value>jdbc:mysql://hadoop101:3306/hive_metadata?createDatabaseIfNotExist=true</value>
+</property>
+<property>
+  <name>javax.jdo.option.ConnectionDriverName</name>
+  <value>com.mysql.jdbc.Driver</value>
+</property>
+<property>
+  <name>javax.jdo.option.ConnectionUserName</name>
+  <value>hive</value>
+</property>
+<property>
+  <name>javax.jdo.option.ConnectionPassword</name>
+  <value>hive</value>
+</property>
+
+4）配置 hive-env.sh
+mv hive-env.sh.template hive-env.sh
+修改：vi bin/hive-config.sh
+export JAVA_HOME=/opt/module/jdk1.7.0_71
+export HIVE_HOME=/opt/module/hive-0.13.1-cdh5.3.6
+export HADOOP_HOME=/opt/module/hadoop-2.7.2
+
+5）测试环境是否可用
+输入hive进入编辑界面：
+创建表：create table users(id int, name string) row format delimited fields terminated by '\t';
+加载文件到hive表中：load data local inpath '/opt/module/users.txt' into table users;(默认'\t’代表的是tab符号)
+select * from users ;  
+select name from users ;
+删除表usrs:drop table users;
+退出：exit;
+
+
+
+
+
+
+===============================实战--实时数据处理流===========================================
+1）定时产生模拟爱奇艺数据流，定时产生数据：
+输入：crontab -e 启动编辑
+ 输入保持：*/1 * * * * /home/test/log/log_generate.sh
+log_generate.sh内容：
+#！/bin/bash
+python  /mnt/hgfs/share/generate.py自动产生数据脚本
+监听：tail -f /home/test/log/log
+
+删除：crontab -r
+显示crontab内容：crontab -l
+
+2）kafka
+三个服务器都启动zoopkeepr/kafka
+三个服务器都创建topic access  ugchead ugctail 
+bin/kafka-topics.sh --zookeeper hadoop101:2181,hadoop102:2181,hadoop103:2181 --create --replication-factor 1 --partitions 1 --topic ugctail 
+创建一个生产者（此处生产者为flume送过来的数据，不用创建）：bin/kafka-console-producer.sh --broker-list hadoop102:2181 --topic access
+开启消费者观察数据是否有：
+bin/kafka-console-consumer.sh --zookeeper hadoop102:2181 --topic access --from-beginning
+
+3)hadoop 离线流
+启动hdfs和RM
+在adoop101即namenode启动hdf
+[test@hadoop101 hadoop-2.7.2]$ sbin/start-dfs.sh
+3）启动yarn，在hadoop102上
+[test@hadoop102 hadoop-2.7.2]$ sbin/start-yarn.sh
+
+三个服务器启动flume
+ bin/flume-ng agent --conf conf/ --conf-file jobs/hdfs_kafka.conf --name a1 -Dflume.root.logger=INFO,console &
+ 此时从当改变flume输入源文件数据时，会在消费者串口界面打印出添加的数据（kafka的数据）
+ 同时在串口驶入 hdfs dfs -text /source/ugchead/20180909/* | more （查看hdfs中数据变化）
+ 
+ 
+通过remd-web模拟产生数据：
+旋转remed-web文件夹右击，export->java-> runable jar file 产生jar包，放到单板下执行，java -jar xx.jar即可
+注意：log4j需要与java文件同级目录
+-------------------mahout部署--------------------------
+下载：http://archive.apache.org/dist/mahout/0.12.2/
+apache-mahout-distribution-0.12.2.tar.gz 解压到：/opt/module
+添加环境变量：
+export MAHOUT_HOME=/opt/module/apache-mahout-distribution-0.12.2
+export MAHOUT_CONF_DIR=${MAHOUT_HOME}/conf
+export PATH=$PATH:${MAHOUT_HOME}/conf
+export PATH=$PATH:${MAHOUT_HOME}/bin
+输入mahout测试
+同步到三台服务器
+
++++++++++++++++++++++++++++++注意+++++++++++++++++++++++++++++++++++++++
+//两种运行模式的区别在于export中选择 jar file或 runable jar file 区别 
+//hadoop jar wordcount.jar com.test.wordcount.WordcountDriver  /result/input/log.txt /result/output 
+//hadoop jar wordcount.jar /result/input/log.txt /result/output/
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+pip下载不了文件时候
+pip install gensim  -i http://pypi.douban.com/simple --trusted-host pypi.douban.com
+解决pom第一韩保存问题：
+		<dependency>
+            <groupId>jdk.tools</groupId>
+            <artifactId>jdk.tools</artifactId>
+            <version>1.6</version>
+            <scope>system</scope>
+            <systemPath>${JAVA_HOME}/lib/tools.jar</systemPath>
+		</dependency>基于内容的推荐算法
+
+jupyter notebook
+--------------------------机器学习算法----------------------------------------
+朴素贝叶斯分类算法
+	原理：p(类别|特征)= p(特征|类别)*p(类别)/p(特征)	基于一假设即特征之间是独立的。如p(类别1|A&B&C&D)=P(A&B&C&D|类别1)*P(类别1)/P(A&B&C&D) = P(A|类别1)*P(B|类别1)*P(C|类别1)*P(D|类别1)*P(类别1)/P(A)*P(B)*P(C)*P(D)
+	
+	使用场景：常常用于文档的分类；
+	
+	计算过程：【确定特征属性-->获取训练样本】-->【对每个类别计算如P(类别1)-->对每个特征属性计算条件概率如P(A|类别1)】-->对每个类别计算P(A&B&C&D|类别1)*P(类别1)-->以最终概率最大项作为所属类别
+	              准备阶段                                            训练阶段                                                           应用阶段   
+	1、准备工作阶段，任务是为朴素贝叶斯分类做必要的准备，主要工作是根据具体情况确定特征属性，并对每个特征属性进行适当划分，然后由人工对一部分待分类项进行分类，形成训练样本集合。这一阶段的输入是所有待分类数据，输出是特征属性和训练样本。这一阶段是整个朴素贝叶斯分类中唯一需要人工完成的阶段，其质量对整个过程将有重要影响，分类器的质量很大程度上由特征属性、特征属性划分及训练样本质量决定。
+	2、分类器训练阶段。这个阶段的任务就是生成分类器，主要工作是计算每个类别在训练样本中的出现频率及每个特征属性划分对每个类别的条件概率估计，并将结果记录。其输入是特征属性和训练样本，输出是分类器。这一阶段是机械性阶段，根据前面讨论的公式可以由程序自动计算完成。
+	3、应用阶段。这个阶段的任务是使用分类器对待分类项进行分类，其输入是分类器和待分类项，输出是待分类项与类别的映射关系。这一阶段也是机械性阶段，由程序完成。
+
+	优点：算法逻辑简单,易于实现；分类过程中时空开销小
+	缺点：在属性个数比较多或者属性之间相关性较大时，分类效果不好；
+
+
+决策树
+	三个步骤：特征选择、决策树生成、决策树的修剪；
+	1）决策树的生成：际上就是寻找最纯净的划分方法：
+		1、ID3算法使用信息增益作为不纯度：
+		2、C4.5算法使用信息增益率作为不纯度
+		3、CART算法使用基尼系数作为不纯度
+	
+	2）决策树要达到寻找最纯净划分的目标要干两件事，建树和剪枝
+	建树：
+		1、如何按次序选择属性（通过不纯度计算指标衡量）
+		 ID3算法用的是信息增益，C4.5算法用信息增益率；CART算法使用基尼系数。决策树方法是会把每个特征都试一遍，然后选取那个，能够使分类分的最好的特征，也就是说将A属性作为父节点，产生的纯度增益（GainA）要大于B属性作为父节点，则A作为优先选取的属性。
+		2、如何分裂训练数据（对每个属性选择最优的分割点）
+		三种方法对比：
+	
+	优缺点：
+		ID3的缺点，倾向于选择水平数量较多的变量，可能导致训练得到一个庞大且深度浅的树；另外输入变量必须是分类变量（连续变量必须离散化）；最后无法处理空值。
+		C4.5选择了信息增益率替代信息增益。
+		CART以基尼系数替代熵；最小化不纯度而不是最大化信息增益。
+	剪树：
+	    2、如何停止分裂
+
+GBDT(Gradient Boosting  Decision Tree)梯度提升决策树
+	1）首先介绍集成学习中的两种方法：
+		bagging{随机森林}：从原始数据中使用bootstraping的方法抽取n个训练样本。通过k次训练得到k个模型，最终分类效果则有k哥模型平均值决定。
+		boosting：Boosting有很多种，比如AdaBoost(Adaptive Boosting)， Gradient Boosting等
+		          1、Adaboost ：AdaBoosting方式每次使用的是全部的样本，每轮训练改变样本的权重。下一轮训练的目标是找到一个函数f 来拟合上一轮的残差。当残差足够小或者达到设置的最大迭代次数则停止。Boosting会减小在上一轮训练正确的样本的权重，增大错误样本的权重。（对的残差小，错的残差大）
+				  2、梯度提升的Boosting方式是使用代价函数对上一轮训练出的模型函数f的偏导来拟合残差。
+	2）GBDT 是采用boosting方法和弱分类器CART决策树：其利用了损失函数的负梯度在当前模型的值作为回归问题提升树算法的残差近似值，去拟合一个回归树。
+		让损失函数沿着梯度方向的下降。这个就是gbdt 的 gb的核心了。 利用损失函数的负梯度在当前模型的值作为回归问题提升树算法中的残差的近似值去拟合一个回归树。gbdt 每轮迭代的时候，都去拟合损失函数在当前模型下的负梯度。
+
+		
+明尼苏达大学		
+		
+######################推荐算法#########################
+1、户行为数据：浏览、点击、购买、评分、评论、分享等等。
+
+——————————————————————————推荐算法————————————————————————————————————————————
+五类：
+1）基于流行度的推荐
+   原理：根据物品的热点，比如各大新闻、微博排行榜，分享率、点击率等进行推荐。
+   优点：简单粗暴，适用于新用户的推荐。
+   缺点：无法做到个性化推荐
+   改进：分组热度推荐，比如热爱体育的我们就将体育类的热榜推荐给该类用户
+   
+2）基于协同过滤的推荐算法
+   所谓协同过滤指利用某种兴趣相投的原理进行推荐
+   1、基于用户的协同过滤
+   原理：找到与带推荐商品的用户相似爱好的用户，并把该类用户喜爱的物品推荐给用户；
+   计算过程：找到相似的用户群里欧几里得、余弦距里（根据注重两个向量方向差异性）皮尔逊相关系数，Jaccard公式，；找出集合中用户喜欢的且目标用户 没有的进行推荐；
+   优点：
+
+3）基于物品的推荐：
+	原理：为用户推荐和他过去喜欢的产品相似的产品。
+	计算步骤：1、为每个item抽取出一些特征（也就是item的content了）来表示此item；2、利用一个用户过去喜欢（及不喜欢）的item的特征数据，来学习出此用户的喜好特征（profile）；
+				3、通过比较上一步得到的用户profile与候选item的特征，为此用户推荐一组相关性最大的item。
+	每一步分析：
+	1、Item Representation：即对items做特征工程，通俗来说即对items的属性表达出来，如item = 农夫山泉(品类：矿泉水，价格：1-5，etc)；结构化的（structured）属性与非结构化的（unstructured）属性如文章属性，通过DF-IDF计算到词向量从而转换为结构化数据。
+	2、Profile Learning：
+	3：Recommendation Generation：
+
+4）基于模型的推荐：
+
+5）混合推荐：
+
+------------------------------距离和相似度度量方法--------------------------------------------------
+空间
+2、协同过滤算法包括：1）KNN基于邻域的方法，矩阵分解、隐语义模型LFM，基于图的随机游走等。基于物品的推荐使用最多。
+3、KNN基于邻域的方法包括：基于用户的协同过滤UserCF 和 基于物品的协同过滤ItemCF。
+	a.基于用户的协同过滤UserCF，可以分为以下两步进行：
+		一、找到和目标用户兴趣相似的用户集合（基于距离计算相似度、皮尔逊相关系数、夹角余弦计算相似度、Tanimoto系数计算相似度）
+		二、找和这个集合中的用户喜欢的，且目标用户没有听说过的物品推荐给目标用户
+	b.基于物品的协同过滤ItemCF:
+		一、计算物品之间的相似度；（基于距离计算相似度、皮尔逊相关系数、夹角余弦计算相似度、Tanimoto系数计算相似度）
+		二、根据物品的相似度和用户的历史行为给用户生成推荐列表；
+		缺点：无法解决冷启动问题，需要结合其他算法
+——————————————————————————————————基于内容推荐———————————————————————————————
+前提假设条件是用户会喜欢和自己以前喜欢的物品内容属性相似的物品。
+一般情况下，计算视频之间的属性相似度是从视频的特征（类型、
+地区、演员、剧情简介等）中抽取关键词，然后确定这些关键词的权重，得到这
+个视频的向量模型，最后根据向量模型计算视频之间的属性相似度。
+内容推荐能够很好的解决用户冷启动问
+
+
+—————————————————————————————————————文本聚类—————————————————————————————————
+文本聚类计算视频分类权重、得到视频属性权值。
+【数据清洗-->分词-->停词】-->【TF计算-->IDF计算-->文本向量化】-->Kmean聚类
+TF:表示特征词在文档中出现的频率;
+IDF:文件词语所在文件占总文件的比例.
+单词 wj 的 TF-IDF的权值 W[i][j]=TF(j)*IDF(j)，所以每个文本的向量可表示为 W[i][j]（j=1…n），j为特征词个数，i为文本
+分词工具：IKAnalyzer
+
+
+1）中文分词：
+		方法有：基于词库或者词典匹配的分词方法、基于知识理解（语义）的分词方法、基于词频统计的分词方法。
+2）文本表示：指将原始文本转换成计算机能够识别的数据形式。
+	包括两方面工作：特征提取、定义特征的权重和语义的相似度。
+	文本的表示模型有：
+		a.布尔模型（ 表示文档中不含有该特征词，1 表示文档中含有该特征词。）
+		b.向量空间模型(权重计算方法是 TF-IDF)
+		c.语言模型
+3)文本聚类算法
+	包括：基于层次聚类算法、基于划分的聚类算法（Kmeans ）、基于密度的聚类算法
+其中Kmeans包括3个核心点：
+	一是划分类的个数K，二是聚类过程中选择中心点；三是聚类的终止条件。
+	计算流程：确定数据集聚类的个数 K，并且选取 K 个初始化中心点。然后，计算每个对象与各个聚类中心的距离即相似性（余弦定理），并将该对象划到距离最近的类。最后计算每个类中对象的平均值，
+			  更新每个类的中心。重复上面的步骤，直至达到终止条件
+—————————————————————————————基于物品的推荐算法—————————————————————————————————————
+训练流程、推荐流程
+1）训练流程：对收集的用户行为数据进行分析，通过建立用户兴趣模型，得到用户的偏好数据，然后计算出视频之间的相似度。
+	
+用户兴趣模型（评分）：通过对用户历史操作行为数据分析获得对节目的偏好程度。
+--------------------------------------------------------------------------------------
+----------------------------推荐系统----------------------------------------------------------
+1）召回层
+	根据用户的历史数据、实时行为、用户画像等数据利用，各种推荐策略生成内容候选集，供后面的排序算法使用
+2）排序层
+	算法：逻辑回归、GDBT、WD
+	步骤：数据处理、特征工程、模型训练、模型选择
+		特征工程：特征处理、特征选择、特征降维等
+		卡方检验算法 降低one-hot维数
+	逻辑回归：线性模型
+	优点：
+		
+3）过滤层
+-----------------------------评价指标-------------------------------------------------------	
+离线评价指标：AUC/ROC（可以反映模型的泛化能力）,召回率（可以反映推荐结果的覆盖度）、准确率（可以反映推荐结果的准确度）
+
+
+
+-----------------------------------------------------------------------------------------
+
+===================================spark 大型项目编程====================================
+1）JDBC
+	<dependency>
+	  <groupId>mysql</groupId>
+	  <artifactId>mysql-connector-java</artifactId>
+	  <version>5.1.6</version>
+	</dependency>
+	
+	
+2）JAR下载太慢在pom中添加：
+     <repositories>
+        <repository>
+            <id>aliyun</id>
+            <name>aliyun</name>
+            <url>http://maven.aliyun.com/nexus/content/groups/public/</url>
+            <layout>default</layout>
+            <releases>
+                <enabled>true</enabled>
+                <updatePolicy>never</updatePolicy>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+                <updatePolicy>never</updatePolicy>
+            </snapshots>
+        </repository>
+    </repositories>
+    <pluginRepositories>
+            <pluginRepository>
+            <id>aliyun</id>
+            <name>aliyun</name>
+            <url>http://maven.aliyun.com/nexus/content/groups/public/</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+            </pluginRepository>
+        </pluginRepositories>
+  
+ 3）jdbc控制mysql方法：
+ public static void preparedStatement() {
+		
+		Connection connection = null;
+		PreparedStatement pstmt = null;
+		
+		try {
+			Class.forName("com.mysql.jdbc.Driver");
+			
+			connection = DriverManager.getConnection(
+					"jdbc:mysql://localhost:3306/spark_project?useUnicode=true&characterEncoding=utf8",
+					"root",
+					"123456");
+
+			String sql = "insert into test_user(name,age) values(?,?)";
+			pstmt = connection.prepareStatement(sql);
+			
+			pstmt.setString(1, "qiang");
+			pstmt.setInt(2, 12);
+			
+			int rnt = pstmt.executeUpdate();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+		}finally {
+			try {
+				
+				if(connection != null) connection.close();
+				if(pstmt != null) pstmt.close();
+				
+			} catch (Exception e2) {
+				e2.printStackTrace();
+			}
+			
+		}	
+	}
+
+Eclipse中的Maven设置：
+Window->preferences->maven->installation->add Maven的安装目录
+
